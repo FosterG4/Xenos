@@ -1,0 +1,14 @@
+# MSBuild & Visual Studio 2022 Guide
+
+- This project is designed to be built using **MSBuild** and **Visual Studio 2022**.
+- The main solution file is [Xenos.sln](mdc:Xenos.sln).
+- You can open the solution in Visual Studio 2022 for full IDE support, including debugging, IntelliSense, and project management.
+- To build from the command line, use:
+  - `msbuild Xenos.sln /p:Configuration=Release` (or `Debug`)
+- All major subprojects (including BlackBone and driver code) are included in the solution and can be built together.
+- Ensure you have the required C++ toolsets and Windows SDKs installed in Visual Studio 2022.
+- For custom build steps or troubleshooting, refer to the [README.md](mdc:README.md) or project documentation.
+description:
+globs:
+alwaysApply: false
+---

@@ -1,0 +1,15 @@
+# Project Structure Guide
+
+- The main solution file is [Xenos.sln](mdc:Xenos.sln).
+- The primary application code is in [src/](mdc:src/) and [ext/blackbone/src/BlackBone/](mdc:ext/blackbone/src/BlackBone/).
+- The [src/](mdc:src/) directory contains the main application logic, dialogs, utilities, and resources for the Xenos injector.
+- The [ext/blackbone/](mdc:ext/blackbone/) directory is a submodule containing the BlackBone library, which provides low-level process and memory manipulation functionality.
+- Driver code is in [ext/blackbone/src/BlackBoneDrv/](mdc:ext/blackbone/src/BlackBoneDrv/).
+- Tests are in [ext/blackbone/src/BlackBoneTest/](mdc:ext/blackbone/src/BlackBoneTest/).
+- Sample usage is in [ext/blackbone/src/Samples/](mdc:ext/blackbone/src/Samples/).
+- The [README.md](mdc:README.md) files provide high-level overviews in both the root and submodules.
+- the project build with visual studio 2019 but make it support 2022 or update it
+description:
+globs:
+alwaysApply: false
+---
