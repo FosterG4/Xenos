@@ -30,6 +30,7 @@ MainDlg::MainDlg( MainDlg::StartAction action, const std::wstring& defConfig /*=
     _events[ID_PROFILES_SAVE]       = static_cast<Dialog::fnDlgProc>(&MainDlg::OnSaveProfile);
     _events[ID_TOOLS_PROTECT]       = static_cast<Dialog::fnDlgProc>(&MainDlg::OnProtectSelf);
     _events[ID_TOOLS_EJECTMODULES]  = static_cast<Dialog::fnDlgProc>(&MainDlg::OnEjectModules);
+    _events[IDC_ENCRYPT_BTN]        = static_cast<Dialog::fnDlgProc>(&MainDlg::OnEncryptDll);
 
     // Accelerators
     _events[ID_ACCEL_OPEN]          = static_cast<Dialog::fnDlgProc>(&MainDlg::OnLoadProfile);
@@ -54,6 +55,8 @@ INT_PTR MainDlg::OnInit( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
     _selectProc.Attach( _hwnd, IDC_SELECT_PROC );
     _modules.Attach( _hwnd, IDC_MODS );
     _inject.Attach( _hwnd, IDC_EXECUTE );
+    _encryptDll.Attach( _hwnd, IDC_ENCRYPT_DLL );
+    _encryptBtn.Attach( _hwnd, IDC_ENCRYPT_BTN );
 
     // Setup modules view
     _modules.AddColumn( L"Name", 150, 0 );
@@ -328,4 +331,84 @@ INT_PTR MainDlg::OnEjectModules( HWND hDlg, UINT message, WPARAM wParam, LPARAM 
 
     ModulesDlg dlg( _core.process() );
     return dlg.RunModal( hDlg );
+}
+
+INT_PTR MainDlg::OnEncryptDll( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
+{
+    // Get selected modules to encrypt
+    std::vector<int> selectedItems;
+    int item = -1;
+    
+    // If no specific item is selected, encrypt all modules
+    if (_modules.selection() == -1)
+    {
+        for (int i = 0; i < ListView_GetItemCount(_modules.hwnd()); ++i)
+            selectedItems.push_back(i);
+    }
+    else
+    {
+        selectedItems.push_back(_modules.selection());
+    }
+
+    if (selectedItems.empty())
+    {
+        Message::ShowInfo( hDlg, L"No modules to encrypt" );
+        return TRUE;
+    }
+
+    int encrypted = 0;
+    for (int index : selectedItems)
+    {
+        if (index >= 0 && index < static_cast<int>(_images.size()))
+        {
+            auto& img = _images[index];
+            std::wstring originalPath = img->path();
+            std::wstring encryptedPath = originalPath + L".encrypted";
+
+            // Check if already encrypted
+            if (DllEncryption::IsEncrypted(originalPath))
+            {
+                Message::ShowInfo( hDlg, L"Module '" + blackbone::Utils::StripPath(originalPath) + L"' is already encrypted" );
+                continue;
+            }
+
+            // Encrypt the DLL
+            if (DllEncryption::EncryptDll(originalPath, encryptedPath))
+            {
+                // Replace the original path with encrypted path
+                img->Load(encryptedPath);
+                encrypted++;
+                
+                xlog::Normal( "Encrypted DLL: %ls -> %ls", originalPath.c_str(), encryptedPath.c_str() );
+            }
+            else
+            {
+                Message::ShowError( hDlg, L"Failed to encrypt: " + blackbone::Utils::StripPath(originalPath) );
+            }
+        }
+    }
+
+    if (encrypted > 0)
+    {
+        Message::ShowInfo( hDlg, L"Successfully encrypted " + std::to_wstring(encrypted) + L" module(s)" );
+        
+        // Update the module list display to show encrypted status
+        for (int i = 0; i < ListView_GetItemCount(_modules.hwnd()); ++i)
+        {
+            if (i < static_cast<int>(_images.size()))
+            {
+                auto& img = _images[i];
+                if (DllEncryption::IsEncrypted(img->path()))
+                {
+                    std::wstring itemText = _modules.itemText(i, 0);
+                    if (itemText.find(L" [ENCRYPTED]") == std::wstring::npos)
+                    {
+                        ListView_SetItemText(_modules.hwnd(), i, 0, (LPWSTR)(itemText + L" [ENCRYPTED]").c_str());
+                    }
+                }
+            }
+        }
+    }
+
+    return TRUE;
 }

@@ -210,6 +210,7 @@
     <ClCompile Include="MainDlg.cpp" />
     <ClCompile Include="Routines.cpp" />
     <ClCompile Include="DlgModules.cpp" />
+    <ClCompile Include="DllEncryption.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Button.hpp" />
@@ -236,6 +237,7 @@
     <ClInclude Include="StatusBar.hpp" />
     <ClInclude Include="StringUtil.h" />
     <ClInclude Include="MainDlg.h" />
+    <ClInclude Include="DllEncryption.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="Window.hpp" />

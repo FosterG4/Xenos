@@ -63,6 +63,8 @@
 #define IDC_CHECK1                      1031
 #define IDC_KRN_HANDLE                  1031
 #define IDC_SKIP                        1032
+#define IDC_ENCRYPT_DLL                 1033
+#define IDC_ENCRYPT_BTN                 1034
 #define ID_TOOLS_EJECTMODULES           32772
 #define ID_TOOLS_PROTECTSELF            32773
 #define ID_TOOLS_PROTECT                32774

@@ -11,6 +11,7 @@
 #include "StatusBar.hpp"
 #include "Message.hpp"
 #include "InjectionCore.h"
+#include "DllEncryption.h"
 
 #include "Log.h"
 
@@ -127,6 +128,7 @@ private:
 
     MSG_HANDLER( OnEjectModules );
     MSG_HANDLER( OnProtectSelf );
+    MSG_HANDLER( OnEncryptDll );
 
 private:
     StartAction     _action;        // Starting action
@@ -151,4 +153,6 @@ private:
     ctrl::Button _autoProc;         // Manual launch radio-button
     ctrl::Button _selectProc;       // Select process path
     ctrl::Button _inject;           // Inject button
+    ctrl::Button _encryptDll;       // Encrypt DLL checkbox
+    ctrl::Button _encryptBtn;       // Encrypt button
 };

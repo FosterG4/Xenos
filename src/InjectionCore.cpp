@@ -1,5 +1,6 @@
 #include "InjectionCore.h"
-#include <BlackBone/src/BlackBone/Process/RPC/RemoteFunction.hpp>
+#include "DllEncryption.h"
+#include "../ext/blackbone/src/BlackBone/Process/RPC/RemoteFunction.hpp"
 #include <iterator>
 
 InjectionCore::InjectionCore( HWND& hMainDlg )
@@ -569,14 +570,55 @@ NTSTATUS InjectionCore::InjectSingle( InjectContext& context, blackbone::pe::PEI
                     if (img.isExe())
                         flags |= blackbone::RebaseProcess;
 
-                    auto injectedMod = _process.mmap().MapImage( img.path(), flags, modCallback );
-                    if (!injectedMod)
+                    // Use improved memory-based injection for encrypted DLLs
+                    if (DllEncryption::IsEncrypted(img.path()))
                     {
-                        status = injectedMod.status;
-                        xlog::Error( "Failed to inject image using manual map, status: 0x%X", injectedMod.status );
+                        xlog::Normal( "Detected encrypted DLL, using memory-based injection: %ls", img.path().c_str() );
+                        
+                        std::vector<uint8_t> decryptedData;
+                        if (!DllEncryption::DecryptToMemory(img.path(), decryptedData))
+                        {
+                            xlog::Error( "Failed to decrypt DLL to memory: %ls", img.path().c_str() );
+                            status = STATUS_DECRYPTION_FAILED;
+                            break;
+                        }
+
+                        // Inject directly from memory buffer (NO temporary files!)
+                        auto injectedMod = _process.mmap().MapImage( 
+                            decryptedData.size(), 
+                            decryptedData.data(), 
+                            false,  // asImage = false (raw file data)
+                            flags, 
+                            modCallback 
+                        );
+
+                        // Secure cleanup
+                        DllEncryption::SecureZeroMemory(decryptedData.data(), decryptedData.size());
+
+                        if (!injectedMod)
+                        {
+                            status = injectedMod.status;
+                            xlog::Error( "Failed to inject encrypted image using memory-based manual map, status: 0x%X", injectedMod.status );
+                        }
+                        else
+                        {
+                            mod = injectedMod.result();
+                            xlog::Normal( "Successfully injected encrypted DLL from memory: %ls", img.path().c_str() );
+                        }
                     }
                     else
-                        mod = injectedMod.result();
+                    {
+                        // Regular file-based injection for unencrypted DLLs
+                        auto injectedMod = _process.mmap().MapImage( img.path(), flags, modCallback );
+                        
+                        if (!injectedMod)
+                        {
+                            status = injectedMod.status;
+                            xlog::Error( "Failed to inject image using manual map, status: 0x%X", injectedMod.status );
+                        }
+                        else
+                            mod = injectedMod.result();
+                    }
                 }
                 break;
 
@@ -682,11 +724,66 @@ blackbone::call_result_t<blackbone::ModuleDataPtr> InjectionCore::InjectDefault(
     }
     else
     {
-        auto injectedMod = _process.modules().Inject( img.path(), pThread );
-        if (!injectedMod)
-            xlog::Error( "Failed to inject image using default injection, status: 0x%X", injectedMod.status );
+        // For Normal injection mode, we still need to use temporary files
+        // because LoadLibrary requires a file path, but we optimize the process
+        if (DllEncryption::IsEncrypted(img.path()))
+        {
+            xlog::Normal( "Detected encrypted DLL for normal injection: %ls", img.path().c_str() );
+            
+            // Use the new EncryptedDllMemory class for better performance
+            EncryptedDllMemory encryptedDll(img.path());
+            if (!encryptedDll.LoadAndDecrypt())
+            {
+                xlog::Error( "Failed to load and decrypt DLL: %ls", img.path().c_str() );
+                return STATUS_DECRYPTION_FAILED;
+            }
 
-        return injectedMod;
+            // Create optimized temporary file
+            wchar_t tempDir[MAX_PATH];
+            GetTempPathW(MAX_PATH, tempDir);
+            
+            wchar_t tempFile[MAX_PATH];
+            GetTempFileNameW(tempDir, L"xen", 0, tempFile);
+            
+            std::wstring tempPath = tempFile;
+            
+            // Write decrypted data directly from secure memory
+            std::ofstream outFile(tempPath, std::ios::binary);
+            if (!outFile.is_open())
+            {
+                xlog::Error( "Failed to create temporary file: %ls", tempPath.c_str() );
+                return STATUS_FILE_INVALID;
+            }
+
+            outFile.write(reinterpret_cast<const char*>(encryptedDll.GetDecryptedData()), encryptedDll.GetDecryptedSize());
+            outFile.close();
+
+            xlog::Normal( "Created optimized temporary file for normal injection: %ls", tempPath.c_str() );
+
+            // Inject using temporary file
+            auto injectedMod = _process.modules().Inject( tempPath, pThread );
+            
+            // Clean up temporary file immediately
+            DeleteFileW(tempPath.c_str());
+            xlog::Normal( "Cleaned up temporary file: %ls", tempPath.c_str() );
+
+            if (!injectedMod)
+                xlog::Error( "Failed to inject encrypted image using normal injection, status: 0x%X", injectedMod.status );
+            else
+                xlog::Normal( "Successfully injected encrypted DLL using normal injection: %ls", img.path().c_str() );
+
+            return injectedMod;
+        }
+        else
+        {
+            // Regular unencrypted DLL injection
+            auto injectedMod = _process.modules().Inject( img.path(), pThread );
+            
+            if (!injectedMod)
+                xlog::Error( "Failed to inject image using default injection, status: 0x%X", injectedMod.status );
+
+            return injectedMod;
+        }
     }
 }
 
@@ -702,11 +799,53 @@ NTSTATUS InjectionCore::InjectKernel(
     uint32_t initRVA /*= 0*/
     )
 {
+    std::wstring injectPath = img.path();
+    std::wstring tempPath;
+    bool needsCleanup = false;
+
+    // Handle encrypted DLLs for kernel injection
+    if (DllEncryption::IsEncrypted(img.path()))
+    {
+        xlog::Normal( "Detected encrypted DLL for kernel injection: %ls", img.path().c_str() );
+        
+        EncryptedDllMemory encryptedDll(img.path());
+        if (!encryptedDll.LoadAndDecrypt())
+        {
+            xlog::Error( "Failed to load and decrypt DLL for kernel injection: %ls", img.path().c_str() );
+            return STATUS_DECRYPTION_FAILED;
+        }
+
+        // Create temporary file for kernel injection (required by driver)
+        wchar_t tempDir[MAX_PATH];
+        GetTempPathW(MAX_PATH, tempDir);
+        
+        wchar_t tempFile[MAX_PATH];
+        GetTempFileNameW(tempDir, L"xen", 0, tempFile);
+        
+        tempPath = tempFile;
+        
+        std::ofstream outFile(tempPath, std::ios::binary);
+        if (!outFile.is_open())
+        {
+            xlog::Error( "Failed to create temporary file for kernel injection: %ls", tempPath.c_str() );
+            return STATUS_FILE_INVALID;
+        }
+
+        outFile.write(reinterpret_cast<const char*>(encryptedDll.GetDecryptedData()), encryptedDll.GetDecryptedSize());
+        outFile.close();
+
+        injectPath = tempPath;
+        needsCleanup = true;
+        xlog::Normal( "Created temporary file for kernel injection: %ls", tempPath.c_str() );
+    }
+
+    NTSTATUS status = STATUS_SUCCESS;
+
     if (context.cfg.injectMode == Kernel_MMap)
     {
-        return blackbone::Driver().MmapDll(
+        status = blackbone::Driver().MmapDll(
             context.pid,
-            img.path(),
+            injectPath,
             (KMmapFlags)context.cfg.mmapFlags,
             initRVA,
             context.cfg.initArgs
@@ -714,9 +853,9 @@ NTSTATUS InjectionCore::InjectKernel(
     }
     else
     {
-        return blackbone::Driver().InjectDll(
+        status = blackbone::Driver().InjectDll(
             context.pid,
-            img.path(),
+            injectPath,
             (context.cfg.injectMode == Kernel_Thread ? IT_Thread : IT_Apc),
             initRVA,
             context.cfg.initArgs,
@@ -724,6 +863,20 @@ NTSTATUS InjectionCore::InjectKernel(
             context.cfg.erasePE
             );
     }
+
+    // Clean up temporary file if created
+    if (needsCleanup && !tempPath.empty())
+    {
+        DeleteFileW(tempPath.c_str());
+        xlog::Normal( "Cleaned up temporary file for kernel injection: %ls", tempPath.c_str() );
+    }
+
+    if (NT_SUCCESS(status) && DllEncryption::IsEncrypted(img.path()))
+    {
+        xlog::Normal( "Successfully injected encrypted DLL using kernel injection: %ls", img.path().c_str() );
+    }
+
+    return status;
 }
 
 /// <summary>
@@ -733,7 +886,61 @@ NTSTATUS InjectionCore::InjectKernel(
 /// <returns>Error code</returns>
 NTSTATUS InjectionCore::MapDriver( InjectContext& context, const blackbone::pe::PEImage& img )
 {
-    return blackbone::Driver().MMapDriver( img.path() );
+    std::wstring driverPath = img.path();
+    std::wstring tempPath;
+    bool needsCleanup = false;
+
+    // Handle encrypted drivers
+    if (DllEncryption::IsEncrypted(img.path()))
+    {
+        xlog::Normal( "Detected encrypted driver for mapping: %ls", img.path().c_str() );
+        
+        EncryptedDllMemory encryptedDriver(img.path());
+        if (!encryptedDriver.LoadAndDecrypt())
+        {
+            xlog::Error( "Failed to load and decrypt driver: %ls", img.path().c_str() );
+            return STATUS_DECRYPTION_FAILED;
+        }
+
+        // Create temporary file for driver mapping
+        wchar_t tempDir[MAX_PATH];
+        GetTempPathW(MAX_PATH, tempDir);
+        
+        wchar_t tempFile[MAX_PATH];
+        GetTempFileNameW(tempDir, L"xen", 0, tempFile);
+        
+        tempPath = tempFile;
+        
+        std::ofstream outFile(tempPath, std::ios::binary);
+        if (!outFile.is_open())
+        {
+            xlog::Error( "Failed to create temporary file for driver mapping: %ls", tempPath.c_str() );
+            return STATUS_FILE_INVALID;
+        }
+
+        outFile.write(reinterpret_cast<const char*>(encryptedDriver.GetDecryptedData()), encryptedDriver.GetDecryptedSize());
+        outFile.close();
+
+        driverPath = tempPath;
+        needsCleanup = true;
+        xlog::Normal( "Created temporary file for driver mapping: %ls", tempPath.c_str() );
+    }
+
+    NTSTATUS status = blackbone::Driver().MMapDriver( driverPath );
+
+    // Clean up temporary file if created
+    if (needsCleanup && !tempPath.empty())
+    {
+        DeleteFileW(tempPath.c_str());
+        xlog::Normal( "Cleaned up temporary file for driver mapping: %ls", tempPath.c_str() );
+    }
+
+    if (NT_SUCCESS(status) && DllEncryption::IsEncrypted(img.path()))
+    {
+        xlog::Normal( "Successfully mapped encrypted driver: %ls", img.path().c_str() );
+    }
+
+    return status;
 }
 
 /// <summary>

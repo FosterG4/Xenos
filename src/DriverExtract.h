@@ -1,8 +1,8 @@
 #pragma once
 
 #include "resource.h"
-#include <BlackBone/src/3rd_Party/VersionApi.h>
-#include <BlackBone/src/BlackBone/DriverControl/DriverControl.h>
+#include "../ext/blackbone/src/3rd_party/VersionApi.h"
+#include "../ext/blackbone/src/BlackBone/DriverControl/DriverControl.h"
 
 class DriverExtract
 {
